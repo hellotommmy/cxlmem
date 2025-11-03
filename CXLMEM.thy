@@ -27,9 +27,9 @@ fun get_op_addr :: "mem_msg \<Rightarrow> nat" where
 
 record cxl_state =
   memory :: "nat \<Rightarrow> int"                  
-  m2s_req_chan :: "Req list"      
-  m2s_rwd_chan :: "Rwd list"
-  s2m_drs_chan :: "DRS list"
+  m2sreqs :: "Req list"      
+  m2srwds :: "Rwd list"
+  s2mdrss :: "DRS list"
   counter :: nat
 
 (*
@@ -39,7 +39,8 @@ record cxl_state =
 
 fun external_step :: "(cxl_state * Memop list * Memop_res list)  => (cxl_state * Memop list * Memop_res list)"
   where
-    "external_step (xst, (Read i # mops), mress) = (xst \<lparr>counter := counter xst + 1 \<rparr>, mops, Pending (counter xst) (Read i) # mress)"
+    "external_step (xst, (Read i # mops), mress) = (xst \<lparr>counter := counter xst + 1 \<rparr> \<lparr>m2sreqs := MemRd (counter xst) i # m2sreqs xst \<rparr>, mops, Pending (counter xst) (Read i) # mress)"
+  | "external_step (xst, (Write i v # mops), mress) = (xst \<lparr>counter := counter xst + 1\<rparr> \<lparr>m2sreqs := MemWrite (counter xst) i # m2sreqs xst \<rparr>, mops, Pending (counter xst) (Write i v) # mress)"
 
 
 
