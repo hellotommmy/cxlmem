@@ -39,7 +39,7 @@ record cxl_state =
 
 fun external_step :: "(cxl_state * Memop list * Memop_res list)  => (cxl_state * Memop list * Memop_res list)"
   where
-    "external_step xst (Read i # mops) mress = (xst \<lparr>counter := counter + 1 \<rparr>, mops, )"
+    "external_step (xst, (Read i # mops), mress) = (xst \<lparr>counter := counter xst + 1 \<rparr>, mops, Pending (counter xst) (Read i) # mress)"
 
 
 
