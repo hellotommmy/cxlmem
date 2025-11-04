@@ -84,24 +84,52 @@ lemma initial1_to_next1_external: "initial1 \<leadsto>e next1_external"
 
 type_synonym state = "mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list"
 
+(* Enumerators for list occurrences *)
+fun enum_memrd :: "Req list \<Rightarrow> (Req list * txid * nat * Req list) list" where
+  "enum_memrd [] = []"
+| "enum_memrd (MemRd tx i # rs) = ([], tx, i, rs) # map (\<lambda>(pref,tx',i',suf). (MemRd tx i # pref, tx', i', suf)) (enum_memrd rs)"
+
+fun enum_memwrite :: "Rwd list \<Rightarrow> (Rwd list * txid * nat * int * Rwd list) list" where
+  "enum_memwrite [] = []"
+| "enum_memwrite (MemWrite tx i v # rs) = ([], tx, i, v, rs) # map (\<lambda>(pref,tx',i',v',suf). (MemWrite tx i v # pref, tx', i', v', suf)) (enum_memwrite rs)"
+
+fun enum_cmp :: "NDR list \<Rightarrow> (NDR list * txid * NDR list) list" where
+  "enum_cmp [] = []"
+| "enum_cmp (Cmp tx # rs) = ([], tx, rs) # map (\<lambda>(pref,tx',suf). (Cmp tx # pref, tx', suf)) (enum_cmp rs)"
+
+fun enum_memdata :: "DRS list \<Rightarrow> (DRS list * txid * int * DRS list) list" where
+  "enum_memdata [] = []"
+| "enum_memdata (MemData tx v # rs) = ([], tx, v, rs) # map (\<lambda>(pref,tx',v',suf). (MemData tx v # pref, tx', v', suf)) (enum_memdata rs)"
+
+fun enum_pending_read :: "Memop_res list \<Rightarrow> (Memop_res list * txid * nat * Memop_res list) list" where
+  "enum_pending_read [] = []"
+| "enum_pending_read (Pending tx (Read i) # rs) = ([], tx, i, rs) # map (\<lambda>(pref,tx',i',suf). (Pending tx (Read i) # pref, tx', i', suf)) (enum_pending_read rs)"
+| "enum_pending_read (r # rs) = map (\<lambda>(pref,tx,i,suf). (r # pref, tx, i, suf)) (enum_pending_read rs)"
+
+fun enum_pending_write :: "Memop_res list \<Rightarrow> (Memop_res list * txid * nat * int * Memop_res list) list" where
+  "enum_pending_write [] = []"
+| "enum_pending_write (Pending tx (Write i v) # rs) = ([], tx, i, v, rs) # map (\<lambda>(pref,tx',i',v',suf). (Pending tx (Write i v) # pref, tx', i', v', suf)) (enum_pending_write rs)"
+| "enum_pending_write (r # rs) = map (\<lambda>(pref,tx,i,v,suf). (r # pref, tx, i, v, suf)) (enum_pending_write rs)"
+
 fun external_nexts :: "state \<Rightarrow> state list" where
   "external_nexts (m, reqs, rwds, drss, ndrs, cnt, Read i # mops, mress) =
      [(m, MemRd cnt i # reqs, rwds, drss, ndrs, cnt+1, mops, Pending cnt (Read i) # mress)]"
 | "external_nexts (m, reqs, rwds, drss, ndrs, cnt, Write i v # mops, mress) =
      [(m, reqs, MemWrite cnt i v # rwds, drss, ndrs, cnt+1, mops, Pending cnt (Write i v) # mress)]"
-| "external_nexts _ = []"
+| "external_nexts (m, reqs, rwds, drss, ndrs, cnt, mops, mress) =
+     (let nd_steps = map (\<lambda>(pref,tx,suf).
+                       map (\<lambda>(mpref,tx2,i,v,msuf). (m, reqs, rwds, drss, pref @ suf, cnt, mops, WrRes tx i v # mpref @ msuf))
+                           (filter (\<lambda>(mp,tx2,_,_,_). tx2 = tx) (enum_pending_write mress))) (enum_cmp ndrs);
+          drs_steps = map (\<lambda>(dpref,tx,v,dsuf).
+                       map (\<lambda>(mpref,tx2,i,msuf). (m, reqs, rwds, dpref @ dsuf, ndrs, cnt, mops, RdRes tx i v # mpref @ msuf))
+                           (filter (\<lambda>(mp,tx2,_,_). tx2 = tx) (enum_pending_read mress))) (enum_memdata drss)
+      in concat nd_steps @ concat drs_steps)"
 
 fun internal_nexts :: "state \<Rightarrow> state list" where
   "internal_nexts (m, reqs, rwds, drss, ndrs, cnt, mops, mress) = (
-     let recR = (let f = (\<lambda>pref xs. case xs of [] \<Rightarrow> []
-                        | MemRd tx i # rs \<Rightarrow> (m, pref @ rs, rwds, MemData tx (read_mem m i) # drss, ndrs, cnt, mops, mress) # f (pref @ [MemRd tx i]) rs
-                        | r # rs \<Rightarrow> f (pref @ [r]) rs)
-                  in f [] reqs)
-     ; recW = (let f = (\<lambda>pref xs. case xs of [] \<Rightarrow> []
-                        | MemWrite tx i v # rs \<Rightarrow> (write_mem m i v, reqs, pref @ rs, drss, Cmp tx # ndrs, cnt, mops, mress) # f (pref @ [MemWrite tx i v]) rs
-                        | r # rs \<Rightarrow> f (pref @ [r]) rs)
-                  in f [] rwds)
-     in recR @ recW)"
+     map (\<lambda>(pref,tx,i,suf). (m, pref @ suf, rwds, MemData tx (read_mem m i) # drss, ndrs, cnt, mops, mress)) (enum_memrd reqs)
+     @ map (\<lambda>(pref,tx,i,v,suf). (write_mem m i v, reqs, pref @ suf, drss, Cmp tx # ndrs, cnt, mops, mress)) (enum_memwrite rwds)
+   )"
 
 fun system_nexts :: "state \<Rightarrow> state list" where
   "system_nexts s = external_nexts s @ internal_nexts s"
