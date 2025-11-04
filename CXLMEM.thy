@@ -1,6 +1,7 @@
 theory CXLMEM imports Main 
 begin
-
+(*version 1: cxl state modelled as a record, for external transitions this is ok, because one needs only the next memory operation. 
+for internal transitions, one needs to see the content of different channels, which is not inductive*)
 fun mem :: "nat \<Rightarrow> int" where
   "mem _ = 0"
 
