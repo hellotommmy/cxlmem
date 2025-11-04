@@ -1,6 +1,6 @@
-theory CXLMEM3 imports Main 
+theory CXLMEM4 imports Main 
 begin
-(* memory as finite association list: still code_pred has difficulty showing inductive relations between two states in a transition *)
+(* use fun instead of inductive relation for external/internal transitions *)
 
 type_synonym mem = "(nat * int) list"
 

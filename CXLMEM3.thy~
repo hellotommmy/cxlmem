@@ -76,17 +76,40 @@ definition next1_external :: "mem * Req list * Rwd list * DRS list * NDR list * 
 
 lemma initial1_to_next1_external: "initial1 \<leadsto>e next1_external"
   unfolding initial1_def next1_external_def mem3_42_def
-  by (rule external_step.intros(1))
+  apply simp
+  by (metis external_step.intros(1) numeral_plus_one semiring_norm(2,8))
 
-(* Make the relations executable *)
-code_pred external_step .
-code_pred internal_step .
-code_pred system_step .
 
-(* Enumerate next states from initial1 *)
-values "{s. initial1 \<leadsto> s}"
-values "{s. initial1 \<leadsto>e s}"
-values "{s. initial1 \<leadsto>i s}"
+(* Executable next-state functions to avoid code_pred limitations with list patterns *)
+
+type_synonym state = "mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list"
+
+fun external_nexts :: "state \<Rightarrow> state list" where
+  "external_nexts (m, reqs, rwds, drss, ndrs, cnt, Read i # mops, mress) =
+     [(m, MemRd cnt i # reqs, rwds, drss, ndrs, cnt+1, mops, Pending cnt (Read i) # mress)]"
+| "external_nexts (m, reqs, rwds, drss, ndrs, cnt, Write i v # mops, mress) =
+     [(m, reqs, MemWrite cnt i v # rwds, drss, ndrs, cnt+1, mops, Pending cnt (Write i v) # mress)]"
+| "external_nexts _ = []"
+
+fun internal_nexts :: "state \<Rightarrow> state list" where
+  "internal_nexts (m, reqs, rwds, drss, ndrs, cnt, mops, mress) = (
+     let recR = (let f = (\<lambda>pref xs. case xs of [] \<Rightarrow> []
+                        | MemRd tx i # rs \<Rightarrow> (m, pref @ rs, rwds, MemData tx (read_mem m i) # drss, ndrs, cnt, mops, mress) # f (pref @ [MemRd tx i]) rs
+                        | r # rs \<Rightarrow> f (pref @ [r]) rs)
+                  in f [] reqs)
+     ; recW = (let f = (\<lambda>pref xs. case xs of [] \<Rightarrow> []
+                        | MemWrite tx i v # rs \<Rightarrow> (write_mem m i v, reqs, pref @ rs, drss, Cmp tx # ndrs, cnt, mops, mress) # f (pref @ [MemWrite tx i v]) rs
+                        | r # rs \<Rightarrow> f (pref @ [r]) rs)
+                  in f [] rwds)
+     in recR @ recW)"
+
+fun system_nexts :: "state \<Rightarrow> state list" where
+  "system_nexts s = external_nexts s @ internal_nexts s"
+
+declare [[values_timeout = 5]]
+
+value "external_nexts initial1"
+value "system_nexts initial1"
 
 end
 
