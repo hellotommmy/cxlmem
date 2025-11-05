@@ -1,6 +1,7 @@
 theory CXLMEM3 imports Main 
 begin
-(* memory as finite association list: still code_pred has difficulty showing inductive relations between two states in a transition *)
+(* memory as finite association list: still code_pred has difficulty showing inductive relations between two states in a transition,
+  we therefore revert to a different representation for ext/internal transitions*)
 
 type_synonym mem = "(nat * int) list"
 
@@ -44,21 +45,32 @@ record cxl_state =
   counter :: nat
 
 (* Transitions over tupled state for executability *)
+definition split_elem :: "'a \<Rightarrow> 'a list \<Rightarrow> 'a list \<Rightarrow> 'a list \<Rightarrow> bool" where
+  "split_elem x xs ys zs \<longleftrightarrow> xs = ys @ x # zs"
+declare split_elem_def [code_pred_def]
 
 inductive  external_step :: "(mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list)  \<Rightarrow> (mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list) \<Rightarrow> bool"
   (infix "\<leadsto>e" 50)
   where 
     read_to_memread:"(m, reqs, rwds, drss, ndrs, cnt, Read i # mops, mress) \<leadsto>e (m, MemRd cnt i # reqs, rwds, drss, ndrs, cnt+1, mops, Pending cnt (Read i) # mress)"
   | write_to_memwrite: "(m, reqs, rwds, drss, ndrs, cnt, Write i v # mops, mress) \<leadsto>e (m, reqs, MemWrite cnt i v # rwds, drss, ndrs, cnt+1, mops, Pending cnt (Write i v) # mress)"
-  | write_cmp: "(m, reqs, rwds, drss, ndrs1 @ [Cmp txid] @ ndrs2, cnt, mops, mress1 @ [Pending txid (Write i v)] @ mress2) \<leadsto>e (m, reqs, rwds, drss, ndrs1@ndrs2, cnt, mops, WrRes txid i v # mress1 @ mress2)"
-  | read_memdata: "(m, reqs, rwds, drss1 @ [MemData txid v] @ drss2, ndrss, cnt, mops, mress1 @ [Pending txid (Read i)] @ mress2) \<leadsto>e (m, reqs, rwds, drss1 @ drss2, ndrss, cnt, mops, RdRes txid i v # mress1 @ mress2)"
+  |     "split_elem (Cmp txid) ndrs ndrs1 ndrs2 \<Longrightarrow>
+     split_elem (Pending txid (Write i v)) mress m1 m2 \<Longrightarrow>
+     (m, reqs, rwds, drss, ndrs, cnt, mops, mress) \<leadsto>e
+     (m, reqs, rwds, drss, ndrs1 @ ndrs2, cnt, mops, WrRes txid i v # m1 @ m2)"
+  | read_memdata:
+      "split_elem (MemData txid v) drss drss1 drss2 \<Longrightarrow>
+       split_elem (Pending txid (Read i)) mress m1 m2 \<Longrightarrow>
+       (m, reqs, rwds, drss, ndrss, cnt, mops, mress) \<leadsto>e (m, reqs, rwds, drss1 @ drss2, ndrss, cnt, mops, RdRes txid i v # m1 @ m2)"
 
 
 inductive internal_step :: "(mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list)  \<Rightarrow> (mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list) \<Rightarrow> bool"
   (infix "\<leadsto>i" 50)
   where
-    "(m, reqs1 @ [MemRd txid i] @ reqs2, rwds, drss, ndrs, cnt, mops, mress) \<leadsto>i (m, reqs1 @ reqs2, rwds, MemData txid (read_mem m i) # drss, ndrs, cnt, mops, mress)"
-  | "(m, reqs, rwds1 @ [MemWrite txid i v] @ rwds2, drss, ndrs, cnt, mops, mress) \<leadsto>i (write_mem m i v, reqs, rwds1 @ rwds2, drss, Cmp txid # ndrs, cnt, mops, mress)"
+    "split_elem (MemRd txid i) reqs reqs1 reqs2 \<Longrightarrow>
+     (m, reqs, rwds, drss, ndrs, cnt, mops, mress) \<leadsto>i (m, reqs1 @ reqs2, rwds, MemData txid (read_mem m i) # drss, ndrs, cnt, mops, mress)"
+  | "split_elem (MemWrite txid i v) rwds rwds1 rwds2 \<Longrightarrow>
+     (m, reqs, rwds, drss, ndrs, cnt, mops, mress) \<leadsto>i (write_mem m i v, reqs, rwds1 @ rwds2, drss, Cmp txid # ndrs, cnt, mops, mress)"
 
 inductive system_step :: "(mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list)  \<Rightarrow> (mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list) \<Rightarrow> bool"
   (infix "\<leadsto>" 50)
@@ -70,6 +82,18 @@ definition mem3_42 :: "mem" where "mem3_42 = write_mem [] 3 42"
 
 definition initial1 :: "mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list" 
   where "initial1 = (mem3_42, [], [], [], [], 15, [Read 3], [])"
+
+
+(*
+code_pred (modes: i \<Rightarrow> o \<Rightarrow> bool as external_step_i_o) external_step .
+code_pred (modes: i \<Rightarrow> o \<Rightarrow> bool as internal_step_i_o) internal_step .
+code_pred (modes: i \<Rightarrow> o \<Rightarrow> bool as system_step_i_o) system_step .
+values "{x. initial1 \<leadsto> x}"
+thm external_step_i_o.equations
+thm internal_step_i_o.equations
+thm system_step_i_o.equations
+*)
+
 
 definition next1_external :: "mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list"
   where "next1_external = (mem3_42, [MemRd 15 3], [], [], [], 16, [], [Pending 15 (Read 3)])"
@@ -122,6 +146,9 @@ definition internal_nexts :: "state \<Rightarrow> state list" where
 
 definition system_nexts :: "state \<Rightarrow> state list" where
   "system_nexts s = external_nexts s @ internal_nexts s"
+
+definition system_nextss :: "nat \<Rightarrow> state \<Rightarrow> state list" where
+
 
 declare [[values_timeout = 5]]
 
