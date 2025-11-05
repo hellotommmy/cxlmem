@@ -43,7 +43,6 @@ fun external_nexts :: "state \<Rightarrow> state list" where
 | "external_nexts (m, reqs, rwds, drss, ndrs, cnt, Write i v # mops, mress) =
       [(m, reqs, MemWrite cnt i v # rwds, drss, ndrs, cnt+1, mops, Pending cnt (Write i v) # mress)]"
 | "external_nexts (m, reqs, rwds, drss, ndrs, cnt, mops, mress) = (
-      (* write completion: choose Cmp tx in ndrs and Pending tx (Write i v) in mress *)
       let cmp_choices = enum_ctx ndrs;
           pw_choices = enum_ctx mress;
           wr_compl = flat_map (\<lambda>(pre1,x1,suf1).
@@ -51,9 +50,7 @@ fun external_nexts :: "state \<Rightarrow> state list" where
                           flat_map (\<lambda>(pre2,x2,suf2).
                             case x2 of Pending tx' (Write i v) \<Rightarrow>
                               if tx = tx' then [(m, reqs, rwds, drss, pre1 @ suf1, cnt, mops, WrRes tx i v # pre2 @ suf2)] else []
-                          | _ \<Rightarrow> []) pw_choices
-                      | _ \<Rightarrow> []) cmp_choices;
-          (* read completion: choose MemData tx v in drss and Pending tx (Read i) in mress *)
+                          | _ \<Rightarrow> []) pw_choices) cmp_choices;
           drs_choices = enum_ctx drss;
           pr_choices = enum_ctx mress;
           rd_compl = flat_map (\<lambda>(pre1,x1,suf1).
@@ -61,8 +58,7 @@ fun external_nexts :: "state \<Rightarrow> state list" where
                           flat_map (\<lambda>(pre2,x2,suf2).
                             case x2 of Pending tx' (Read i) \<Rightarrow>
                               if tx = tx' then [(m, reqs, rwds, pre1 @ suf1, ndrs, cnt, mops, RdRes tx i v # pre2 @ suf2)] else []
-                          | _ \<Rightarrow> []) pr_choices
-                      | _ \<Rightarrow> []) drs_choices
+                          | _ \<Rightarrow> []) pr_choices) drs_choices
       in wr_compl @ rd_compl)"
 
 (* Internal steps: consume one Req or one Rwd at any position *)
@@ -71,11 +67,9 @@ fun internal_nexts :: "state \<Rightarrow> state list" where
       let req_choices = enum_ctx reqs;
           rw_choices = enum_ctx rwds;
           from_reqs = flat_map (\<lambda>(pre,x,suf). case x of MemRd tx i \<Rightarrow>
-                                 [(m, pre @ suf, rwds, MemData tx (read_mem m i) # drss, ndrs, cnt, mops, mress)]
-                               | _ \<Rightarrow> []) req_choices;
+                                 [(m, pre @ suf, rwds, MemData tx (read_mem m i) # drss, ndrs, cnt, mops, mress)]) req_choices;
           from_rwds = flat_map (\<lambda>(pre,x,suf). case x of MemWrite tx i v \<Rightarrow>
-                                 [(write_mem m i v, reqs, pre @ suf, drss, Cmp tx # ndrs, cnt, mops, mress)]
-                               | _ \<Rightarrow> []) rw_choices
+                                 [(write_mem m i v, reqs, pre @ suf, drss, Cmp tx # ndrs, cnt, mops, mress)]) rw_choices
       in from_reqs @ from_rwds)"
 
 definition system_nexts :: "state \<Rightarrow> state list" where
