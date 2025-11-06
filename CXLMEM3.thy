@@ -1,7 +1,10 @@
 theory CXLMEM3 imports Main 
 begin
-(* memory as finite association list: still code_pred has difficulty showing inductive relations between two states in a transition,
-  we therefore revert to a different representation for ext/internal transitions*)
+(* memory as finite association list: still code_pred has difficulty showing inductive relations between two states in a transition (non-linear patterns like ls@[x]@rs not allowed),
+  we try to use different representation (ext_rule1, ext_rule2 etc. for individual transition), however still need to tackle reordering-induced non-linearity 
+  split_elem idea: tell Isabelle how to split the list into ls @ [x] @ rs, this is cumbersome and not sure how to guide isabelle in each step*)
+
+
 
 type_synonym mem = "(nat * int) list"
 
@@ -147,7 +150,6 @@ definition internal_nexts :: "state \<Rightarrow> state list" where
 definition system_nexts :: "state \<Rightarrow> state list" where
   "system_nexts s = external_nexts s @ internal_nexts s"
 
-definition system_nextss :: "nat \<Rightarrow> state \<Rightarrow> state list" where
 
 
 declare [[values_timeout = 5]]
