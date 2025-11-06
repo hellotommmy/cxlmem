@@ -44,6 +44,7 @@ fun external_step :: "(cxl_state * Memop list * Memop_res list)  => (cxl_state *
   | "external_step (xst, (Write i v # mops), mress) = 
     (xst \<lparr>counter := counter xst + 1\<rparr> \<lparr>m2srwds := MemWrite (counter xst) i v # m2srwds xst \<rparr>, mops, Pending (counter xst) (Write i v) # mress)"
 
+fun internal_step :: "(cxl_state
 
 
 
