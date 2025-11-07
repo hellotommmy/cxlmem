@@ -2,12 +2,7 @@ theory CXLMEM5 imports Main
 begin
 
 (* Executable, order-agnostic next-state enumerators by flat-mapping over list elements *)
-(*how about using a third list for completed memory ops, and just prepend to that list, not involving 
-very complicated non-linear patterns on both the response channels and the mress list.
-or even simpler, do not record the pending results in mress, just record every completed transaction with txid in mress.
-even simpler is to use registers to hold read results, not keeping any issued/completed reads/writes.
- 
-.*)
+(*how about using a third list for completed memory ops, so everything works.*)
 type_synonym mem = "(nat * int) list"
 
 fun read_mem :: "mem \<Rightarrow> nat \<Rightarrow> int" where
