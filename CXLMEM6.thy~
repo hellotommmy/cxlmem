@@ -3,9 +3,9 @@ begin
 
 (* Executable, order-agnostic next-state enumerators by flat-mapping over list elements *)
 (*how about using a third list for completed memory ops, and just prepend to that list, not involving 
-very complicated non-linear patterns on both the response channels and the mress list. (now doing)
-or even simpler, do not record the pending results in mress, just record every completed transaction with txid in mress. (implement in the future)
-even simpler is to use registers to hold read results, not keeping any issued/completed reads/writes. (implement in the future)
+very complicated non-linear patterns on both the response channels and the mress list.
+or even simpler, do not record the pending results in mress, just record every completed transaction with txid in mress.
+even simpler is to use registers to hold read results, not keeping any issued/completed reads/writes.
  
 .*)
 definition m0 :: "nat \<Rightarrow> int" where
@@ -34,8 +34,6 @@ datatype mem_msg = ReqMsg Req | RwdMsg Rwd | BIRsp | NDRMsg NDR | DRSMsg DRS  | 
 fun get_op_addr :: "mem_msg \<Rightarrow> nat" where
   "get_op_addr m = (case m of (ReqMsg (MemRd txk i)) \<Rightarrow> i | _ \<Rightarrow> 0)"
 
-type_synonym regs = "nat \<Rightarrow> int"
-
 record cxl_state =
   memory :: "nat \<Rightarrow> int"                  
   m2sreqs :: "Req list"      
@@ -44,63 +42,20 @@ record cxl_state =
   s2mndrs :: "NDR list"
   counter :: nat
 type_synonym state = "mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list"
-type_synonym state2 = "mem * Req list * Rwd list * DRS list * NDR list * nat * Memop list * regs"
 (*
   input_events :: "Memop list"
   output_events:: "Memop_completed list"
   cxl_state: memory * m2sreqs * m2srwds * s2mdrss * counter
 *)
 
-fun flatmap :: "('a \<Rightarrow> 'b list) \<Rightarrow> 'a list \<Rightarrow> 'b list" where
-    "flatmap f [] = []"
-  | "flatmap f (x # xs) = f x @ flatmap f xs"
-
-fun enum_ctx :: "'a list \<Rightarrow> ('a list * 'a * 'a list) list" where
-  "enum_ctx [] = []"
-| "enum_ctx (x#xs) = ([], x, xs) # map (\<lambda>(pre,y,suf). (x#pre, y, suf)) (enum_ctx xs)"
-
-(* flat_map helper *)
-fun flat_map :: "('a \<Rightarrow> 'b list) \<Rightarrow> 'a list \<Rightarrow> 'b list" where
-  "flat_map f [] = []"
-| "flat_map f (x#xs) = f x @ flat_map f xs"
-
-(* External steps: combine four kinds of transitions *)
-fun external_nexts1 :: "state \<Rightarrow> state list" where
-  "external_nexts1 (m, reqs, rwds, drss, ndrs, cnt, Read i # mops, mress) =
-      [(m, MemRd cnt i # reqs, rwds, drss, ndrs, cnt+1, mops, Pending cnt (Read i) # mress)]"
-| "external_nexts1 (m, reqs, rwds, drss, ndrs, cnt, Write i v # mops, mress) =
-      [(m, reqs, MemWrite cnt i v # rwds, drss, ndrs, cnt+1, mops, Pending cnt (Write i v) # mress)]"
-|   "external_nexts1 (m, reqs, rwds, drss, ndrs, cnt, [], mress) =
-      [(m, reqs, rwds, drss, ndrs, cnt, [],  mress)]"
-
-fun external_nexts2 :: "state \<Rightarrow> state list" where
-"external_nexts2 (m, reqs, rwds, drss, ndrs, cnt, mops, mress) = (
-      let cmp_choices = enum_ctx ndrs;
-          wr_compl = flat_map (\<lambda>(pre1,x1,suf1).
-                        case x1 of Cmp tx \<Rightarrow>
-                               [(m, reqs, rwds, drss, pre1 @ suf1, cnt, mops, WrRes tx i v # pre2 @ suf2)]
-                        | _ \<Rightarrow> [])  cmp_choices;
-          drs_choices = enum_ctx drss;
-          rd_compl = flat_map (\<lambda>(pre1,x1,suf1).
-                        case x1 of MemData tx v \<Rightarrow>
-                               [(m, reqs, rwds, pre1 @ suf1, ndrs, cnt, mops, RdRes tx i v # pre2 @ suf2)]
-                          | _ \<Rightarrow> []) drs_choices
-      in wr_compl @ rd_compl)"
-
-
 inductive  external_step :: "((nat => int) * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list)  => ((nat => int) * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list) \<Rightarrow> bool"
   (infix "\<leadsto>e" 50)
   where 
     "(m, reqs, rwds, drss, ndrs, cnt, Read i # mops, mress) \<leadsto>e (m, MemRd cnt i # reqs, rwds, drss, ndrs, cnt+1, mops, Pending cnt (Read i) # mress)"
   | "(m, reqs, rwds, drss, ndrs, cnt, Write i v # mops, mress) \<leadsto>e (m, reqs, MemWrite cnt i v # rwds, drss, ndrs, cnt+1, mops, Pending cnt (Write i v) # mress)"
-  | "(m, reqs, rwds, drss, ndrs1 @ [Cmp txid] @ ndrs2, cnt, mops, mress) \<leadsto>e (m, reqs, rwds, drss, ndrs1@ndrs2, cnt, mops, WrRes txid i v # mress)"
-  | "(m, reqs, rwds, drss1 @ [MemData txid v] @ drss2, ndrss, cnt, mops, mress) \<leadsto>e (m, reqs, rwds, drss1 @ drss2, ndrss, cnt, mops, RdRes txid i v # mress)"
+  | "(m, reqs, rwds, drss, ndrs1 @ [Cmp txid] @ ndrs2, cnt, mops, mress1 @ [Pending txid (Write i v)] @ mress2) \<leadsto>e (m, reqs, rwds, drss, ndrs1@ndrs2, cnt, mops, WrRes txid i v # mress1 @ mress2)"
+  | "(m, reqs, rwds, drss1 @ [MemData txid v] @ drss2, ndrss, cnt, mops, mress1 @ [Pending txid (Read i)] @ mress2) \<leadsto>e (m, reqs, rwds, drss1 @ drss2, ndrss, cnt, mops, RdRes txid i v # mress1 @ mress2)"
 
-fun einit :: "((nat => int) * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list)  => 
-  ((nat => int) * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list) list"
-  where 
-      "einit (m, reqs, rwds, drss, ndrs, cnt, Read i # mops, mress) = [(m, MemRd cnt i # reqs, rwds, drss, ndrs, cnt+1, mops, Pending cnt (Read i) # mress)]"
-    | "einit (m, reqs, rwds, drss, ndrs, cnt, Write i v # mops, mress) = [(m, reqs, MemWrite cnt i v # rwds, drss, ndrs, cnt+1, mops, Pending cnt (Write i v) # mress)]"
 
 inductive internal_step :: "((nat => int) * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list)  => ((nat => int) * Req list * Rwd list * DRS list * NDR list * nat * Memop list * Memop_res list) \<Rightarrow> bool"
   (infix "\<leadsto>i" 50)
