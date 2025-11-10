@@ -264,5 +264,26 @@ value "eval_until_end_ress_nodup 6 LT_WR_diff"
 value "eval_until_end_ress_nodup 6 LT_RW"
 value "eval_until_end_keys_nodup 9 LT_CORR"
 
+(* ---------- Well-formedness: disallow orphan responses (no response without matching pending) ---------- *)
+fun wf_drss :: "DRS list ⇒ (txid ⇒ Memop_res) ⇒ bool" where
+  "wf_drss [] m = True"
+| "wf_drss (MemData tx _ # xs) m = (∃i. m tx = Pending tx (Read i)) ∧ wf_drss xs m"
+| "wf_drss (MemData_NXM tx # xs) m = (∃i. m tx = Pending tx (Read i)) ∧ wf_drss xs m"
+
+fun wf_ndrs :: "NDR list ⇒ (txid ⇒ Memop_res) ⇒ bool" where
+  "wf_ndrs [] m = True"
+| "wf_ndrs (Cmp tx # xs) m = (∃i v. m tx = Pending tx (Write i v)) ∧ wf_ndrs xs m"
+| "wf_ndrs (BI_ConflictAck _ # xs) m = wf_ndrs xs m"
+
+fun wf_state :: "state ⇒ bool" where
+  "wf_state (m, reqs, rwds, drss, ndrs, cnt, mops, mress) = wf_drss drss mress ∧ wf_ndrs ndrs mress"
+
+definition system_nexts_wf :: "state ⇒ state list" where
+  "system_nexts_wf s = filter wf_state (system_nexts s)"
+
+(* Examples (well-formed-only expansions) *)
+value "map mress_pairs (system_nexts_wf initial1)"
+value "map mress_pairs (filter wf_state (eval_until_end 3 initial1))"
+
 
 end
