@@ -1,0 +1,103 @@
+(* --- Extend opcodes to match key CXL.mem operations --- *)
+
+datatype Req =
+    MemRd txid nat               (* read request *)
+  | MemInv txid nat              (* invalidate (no data) *)
+  | MemRdFwd txid nat            (* forward: response to CXL.cache D2H read, no completion on mem *)
+  | MemWrFwd txid nat            (* forward: response to CXL.cache D2H write, no completion on mem *)
+
+datatype Rwd =
+    MemWrite txid nat int        (* full-line write with data (existing) *)
+  | MemWrPtl txid nat int        (* partial write with data; modeled here as full update on the cell *)
+
+datatype NDR =
+    Cmp txid                     (* completion *)
+  | CmpS txid                    (* completion: shared state *)
+  | CmpE txid                    (* completion: exclusive state *)
+  | BI_ConflictAck txid
+
+(* Update helper for extracting the address carried by a mem message if present *)
+fun get_op_addr :: "mem_msg \<Rightarrow> nat" where
+  "get_op_addr (ReqMsg (MemRd _ i)) = i"
+| "get_op_addr (ReqMsg (MemInv _ i)) = i"
+| "get_op_addr (ReqMsg (MemRdFwd _ i)) = i"
+| "get_op_addr (ReqMsg (MemWrFwd _ i)) = i"
+| "get_op_addr _ = 0"
+
+(* --- Spec rule: do not pass MemRdFwd/MemWrFwd for the same cacheline address --- *)
+(* In this model, cacheline granularity = one cell index. If you model real lines, plug the decoder here. *)
+fun same_line :: "nat \<Rightarrow> nat \<Rightarrow> bool" where
+  "same_line a b = (a = b)"
+
+fun has_fwd_same_line :: "Req list \<Rightarrow> nat \<Rightarrow> bool" where
+  "has_fwd_same_line [] _ = False"
+| "has_fwd_same_line (MemRdFwd _ j # xs) i = (same_line j i \<or> has_fwd_same_line xs i)"
+| "has_fwd_same_line (MemWrFwd _ j # xs) i = (same_line j i \<or> has_fwd_same_line xs i)"
+| "has_fwd_same_line (_ # xs) i = has_fwd_same_line xs i"
+
+(* --- INTERNAL steps: now cover MemInv / MemWrPtl / Mem*Fwd and add Cmp-{S,E} --- *)
+fun internal_nexts :: "state \<Rightarrow> state list" where
+"internal_nexts (m, reqs, rwds, drss, ndrs, cnt, mops, mress) = (
+  let
+    (* M2S Req channel: generate S2M responses or apply req semantics *)
+    req_choices = enum_ctx reqs;
+    req_resp = flat_map (\<lambda>(pre1, x1, suf1).
+      case x1 of
+        (* MemRd: produce Cmp + MemData; forbid passing a preceding Mem*Fwd to the same line *)
+        MemRd tx i \<Rightarrow>
+          (if has_fwd_same_line pre1 i then []
+           else [(m, pre1 @ suf1, rwds, MemData tx (m i) # drss, Cmp tx # ndrs, cnt, mops, mress)])
+      | MemInv tx i \<Rightarrow>
+          (* Modeled as pure invalidate acks: produce CmpE; no data, no mem change *)
+          (if has_fwd_same_line pre1 i then []
+           else [(m, pre1 @ suf1, rwds, drss, CmpE tx # ndrs, cnt, mops, mress)])
+      | MemRdFwd _ _ \<Rightarrow>
+          (* Forwarded read: per spec, indication only, no completion on the mem channel; just drop it *)
+          [(m, pre1 @ suf1, rwds, drss, ndrs, cnt, mops, mress)]
+      | MemWrFwd _ _ \<Rightarrow>
+          (* Forwarded write: indication only, no completion on the mem channel; just drop it *)
+          [(m, pre1 @ suf1, rwds, drss, ndrs, cnt, mops, mress)]
+    ) req_choices;
+
+    (* M2S RwD channel: apply writes *)
+    rwd_choices = enum_ctx rwds;
+    rwd_resp = flat_map (\<lambda>(pre1, x1, suf1).
+      case x1 of
+        MemWrite tx i v \<Rightarrow>
+          [(m(i := v), reqs, pre1 @ suf1, drss, Cmp tx # ndrs, cnt, mops, mress)]
+      | MemWrPtl tx i v \<Rightarrow>
+          (* Minimal executable abstraction: treat partial write as a full update of the cell *)
+          [(m(i := v), reqs, pre1 @ suf1, drss, Cmp tx # ndrs, cnt, mops, mress)]
+    ) rwd_choices
+  in
+    req_resp @ rwd_resp
+)"
+
+(* --- EXTERNAL completions: allow Cmp/CmpS/CmpE to complete writes; MemData as before --- *)
+fun external_nexts2 :: "state \<Rightarrow> state list" where
+"external_nexts2 (m, reqs, rwds, drss, ndrs, cnt, mops, mress) = (
+  let
+    cmp_choices = enum_ctx ndrs;
+    wr_compl = flat_map (\<lambda>(pre1, x1, suf1).
+      let complete_wr =
+        (case mress of _ \<Rightarrow> \<lambda>tx i v. [(m, reqs, rwds, drss, pre1 @ suf1, cnt, mops, mress (tx := WrRes tx i v))])
+      in
+      case x1 of
+        Cmp tx \<Rightarrow> (case mress tx of Pending tx (Write i v) \<Rightarrow> complete_wr tx i v | _ \<Rightarrow> [])
+      | CmpS tx \<Rightarrow> (case mress tx of Pending tx (Write i v) \<Rightarrow> complete_wr tx i v | _ \<Rightarrow> [])
+      | CmpE tx \<Rightarrow> (case mress tx of Pending tx (Write i v) \<Rightarrow> complete_wr tx i v | _ \<Rightarrow> [])
+      | _ \<Rightarrow> []
+    ) cmp_choices;
+
+    drs_choices = enum_ctx drss;
+    rd_compl = flat_map (\<lambda>(pre1, x1, suf1).
+      case x1 of
+        MemData tx v \<Rightarrow>
+          (case mress tx of Pending tx (Read i) \<Rightarrow>
+               [(m, reqs, rwds, pre1 @ suf1, ndrs, cnt, mops, mress (tx := RdRes tx i v))]
+           | _ \<Rightarrow> [])
+      | _ \<Rightarrow> []
+    ) drs_choices
+  in
+    wr_compl @ rd_compl
+)"
